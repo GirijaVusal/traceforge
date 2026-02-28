@@ -1,0 +1,585 @@
+<!-- <!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TraceForge | Execution Inspector</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script>
+        tailwind.config = { darkMode: 'class' }
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&family=Fira+Code:wght@400;500&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #0b0f1a; color: #cbd5e1; }
+        .mono { font-family: 'Fira Code', monospace; }
+        .collapsible-content { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.3s ease-out; }
+        .collapsible-content.open { grid-template-rows: 1fr; }
+        .collapsible-content > div { overflow: hidden; }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 10px; }
+    </style>
+</head>
+<body class="antialiased">
+    <div id="app" class="flex flex-col h-screen">
+        <header class="bg-[#111622] border-b border-slate-800 px-8 py-4 flex justify-between items-center shrink-0">
+            <div class="flex items-center gap-4 cursor-pointer" onclick="goHome()">
+                <div class="bg-blue-600 p-2 rounded-xl text-white shadow-lg shadow-blue-500/20"><i data-lucide="zap" class="w-5 h-5"></i></div>
+                <h1 class="text-xl font-bold tracking-tight text-white">TraceForge <span class="text-blue-500 ml-1 opacity-50 text-sm font-mono">v2.0</span></h1>
+            </div>
+            <div class="flex items-center gap-4">
+                <input type="file" id="fileInput" class="hidden" accept=".jsonl,.json">
+                <button onclick="document.getElementById('fileInput').click()" class="bg-slate-800 hover:bg-slate-700 text-white px-5 py-2 rounded-xl text-sm font-semibold transition border border-slate-700">Import Logs</button>
+            </div>
+        </header>
+
+        <div id="projectGallery" class="flex-1 overflow-y-auto p-12 max-w-6xl mx-auto w-full">
+            <h2 class="text-4xl font-black text-white mb-8 tracking-tighter">Projects</h2>
+            <div id="projectGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"></div>
+        </div>
+
+        <main id="inspector" class="hidden flex-1 flex overflow-hidden">
+            <div class="w-80 border-r border-slate-800 bg-[#0d111c] flex flex-col">
+                <div class="p-6 border-b border-slate-800">
+                    <button onclick="goHome()" class="mb-6 text-[11px] font-bold text-slate-500 hover:text-blue-400 flex items-center gap-2 uppercase tracking-widest"><i data-lucide="arrow-left" class="w-4 h-4"></i> Projects</button>
+                    <div class="relative">
+                        <i data-lucide="search" class="w-4 h-4 absolute left-4 top-3.5 text-slate-500"></i>
+                        <input type="text" id="sessionSearch" onkeyup="filterSessions()" placeholder="Search session IDs..." class="w-full pl-11 pr-4 py-3 rounded-xl border border-slate-800 bg-[#161b29] text-sm text-white outline-none focus:ring-1 focus:ring-blue-500">
+                    </div>
+                </div>
+                <div class="flex-1 overflow-y-auto p-3 space-y-1" id="sidebarItems"></div>
+            </div>
+
+            <div class="flex-1 overflow-y-auto p-10 bg-[#0b0f1a]" id="viewport">
+                <div id="emptyState" class="h-full flex flex-col items-center justify-center text-slate-600">
+                    <i data-lucide="terminal" class="w-12 h-12 opacity-20 mb-4"></i>
+                    <p>Select a session to view technical execution</p>
+                </div>
+                <div id="sessionContent" class="hidden max-w-4xl mx-auto">
+                    <div id="threadContainer" class="space-y-10 pb-20"></div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        let projectGroups = {};
+        let sessionGroups = {};
+
+        function toggleBox(header) {
+            const content = header.nextElementSibling;
+            const icon = header.querySelector('.chevron-icon');
+            const isOpen = content.classList.toggle('open');
+            if(icon) icon.style.transform = isOpen ? 'rotate(180deg)' : 'rotate(0deg)';
+        }
+
+        document.getElementById('fileInput').addEventListener('change', (e) => {
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                const lines = ev.target.result.split('\n').filter(l => l.trim());
+                projectGroups = {};
+                lines.forEach(line => {
+                    const t = JSON.parse(line);
+                    const p = t.project || "Default";
+                    if (!projectGroups[p]) projectGroups[p] = [];
+                    projectGroups[p].push(t);
+                });
+                renderProjects();
+            };
+            reader.readAsText(e.target.files[0]);
+        });
+
+        function renderProjects() {
+            const grid = document.getElementById('projectGrid');
+            grid.innerHTML = '';
+            document.getElementById('inspector').classList.add('hidden');
+            document.getElementById('projectGallery').classList.remove('hidden');
+            Object.keys(projectGroups).forEach(p => {
+                const card = document.createElement('div');
+                card.className = "bg-[#111622] p-6 rounded-2xl border border-slate-800 hover:border-blue-500 transition-all cursor-pointer group shadow-xl";
+                card.innerHTML = `<h3 class="text-xl font-bold text-white group-hover:text-blue-400">${p}</h3><p class="text-xs text-slate-500 mt-2 font-mono">${projectGroups[p].length} Traces</p>`;
+                card.onclick = () => selectProject(p);
+                grid.appendChild(card);
+            });
+            lucide.createIcons();
+        }
+
+        function selectProject(p) {
+            document.getElementById('projectGallery').classList.add('hidden');
+            document.getElementById('inspector').classList.remove('hidden');
+            sessionGroups = {};
+            projectGroups[p].forEach(t => {
+                const s = t.metadata?.session_id || "no-session";
+                if (!sessionGroups[s]) sessionGroups[s] = [];
+                sessionGroups[s].push(t);
+            });
+            renderSidebar();
+        }
+
+     
+
+function renderSidebar() {
+    const container = document.getElementById('sidebarItems');
+    container.innerHTML = '';
+    
+    // Sort session IDs by the timestamp of their first trace (Newest session at top)
+    const sortedSessionIds = Object.keys(sessionGroups).sort((a, b) => {
+        const timeA = new Date(sessionGroups[a][0].start_time);
+        const timeB = new Date(sessionGroups[b][0].start_time);
+        return timeB - timeA;
+    });
+
+    sortedSessionIds.forEach(s => {
+        const firstTrace = sessionGroups[s][0];
+        const dateObj = new Date(firstTrace.start_time);
+        
+        // Formatted strings for display AND searching
+        const dateStr = dateObj.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+        const timeStr = dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+        const div = document.createElement('div');
+        // We add 'session-item' for the search selector
+        div.className = "session-item p-4 rounded-xl cursor-pointer hover:bg-slate-800/50 border border-transparent hover:border-slate-700 transition-all mb-1 group";
+        
+        div.innerHTML = `
+            <div class="flex flex-col gap-1">
+                <div class="flex justify-between items-center">
+                    <span class="text-[10px] font-bold text-blue-500 uppercase tracking-tight">Session</span>
+                    <span class="text-[10px] text-slate-500 font-mono search-meta">${dateStr}</span>
+                </div>
+                <div class="text-white text-sm mono truncate group-hover:text-blue-400 transition-colors session-id-text">${s}</div>
+                <div class="text-[11px] text-slate-500 flex items-center gap-1">
+                    <i data-lucide="clock" class="w-3 h-3"></i>
+                    <span class="search-meta">${timeStr}</span>
+                </div>
+            </div>
+        `;
+        
+        div.onclick = () => {
+            document.querySelectorAll('.session-item').forEach(el => el.classList.remove('bg-slate-800', 'border-slate-700'));
+            div.classList.add('bg-slate-800', 'border-slate-700');
+            selectSession(s);
+        };
+        
+        container.appendChild(div);
+    });
+    
+    lucide.createIcons();
+}
+
+function filterSessions() {
+    const val = document.getElementById('sessionSearch').value.toLowerCase();
+    const items = document.querySelectorAll('.session-item');
+    
+    items.forEach(item => {
+        // This gets all text inside the card (ID + Date + Time)
+        const content = item.innerText.toLowerCase();
+        
+        if (content.includes(val)) {
+            item.style.display = 'block';
+        } else {
+            item.style.display = 'none';
+        }
+    });
+}
+        function selectSession(sId) {
+    document.getElementById('emptyState').classList.add('hidden');
+    document.getElementById('sessionContent').classList.remove('hidden');
+    const container = document.getElementById('threadContainer');
+    container.innerHTML = '';
+
+    // Sort descending: Newest at the top
+    const traces = sessionGroups[sId].sort((a, b) => new Date(b.start_time) - new Date(a.start_time));
+
+    traces.forEach((trace, idx) => {
+        const turnCard = document.createElement('div');
+        turnCard.className = "bg-[#0d111c] border border-slate-800 rounded-3xl overflow-hidden shadow-2xl transition-all";
+
+        const span = (trace.spans || [])[0];
+        const messages = span?.outputs?.result?.messages || [];
+        
+        const findToolOutput = (callId, callIdx) => {
+            let toolMsg = messages.find(m => m.type === 'tool' && (m.id === callId || m.data?.id === callId));
+            if (!toolMsg) {
+                toolMsg = messages.find((m, i) => m.type === 'tool' && i > callIdx);
+            }
+            return toolMsg?.data?.content || toolMsg?.content || "No output";
+        };
+
+        let humanInput = "";
+        let aiResponse = "";
+        let tools = [];
+
+        messages.forEach((msg, mIdx) => {
+            if(msg.type === 'human' || msg.data?.type === 'human') {
+                humanInput = msg.data?.content || msg.content;
+            }
+            if(msg.type === 'ai' || msg.data?.type === 'ai') {
+                const content = msg.data?.content || msg.content;
+                if(content) aiResponse = content;
+                const toolCalls = msg.data?.tool_calls || msg.tool_calls || [];
+                toolCalls.forEach(call => {
+                    tools.push({ 
+                        name: call.name, 
+                        args: call.args, 
+                        output: findToolOutput(call.id, mIdx) 
+                    });
+                });
+            }
+        });
+
+        const isOpen = idx === 0;
+        const contentClass = isOpen ? "collapsible-content open" : "collapsible-content";
+        const chevronClass = isOpen ? "w-4 h-4 transition-transform chevron-icon rotate-180 text-slate-500" : "w-4 h-4 transition-transform chevron-icon text-slate-500";
+
+        turnCard.innerHTML = `
+            <div class="px-8 py-4 bg-[#161b29]/50 border-b border-slate-800 flex justify-between items-center cursor-pointer" onclick="toggleBox(this)">
+                <div class="flex items-center gap-4">
+                    <span class="bg-blue-600 text-white text-[10px] font-black px-2 py-1 rounded-md">TURN ${traces.length - idx}</span>
+                    <span class="text-[11px] text-slate-500 font-mono">${new Date(trace.start_time).toLocaleTimeString()}</span>
+                </div>
+                <i data-lucide="chevron-down" class="${chevronClass}"></i>
+            </div>
+            <div class="${contentClass}">
+                <div class="p-8 space-y-8">
+                    <div class="flex gap-5">
+                        <div class="w-8 h-8 rounded-lg bg-slate-800 flex items-center justify-center shrink-0 border border-slate-700"><i data-lucide="user" class="w-4 h-4 text-slate-400"></i></div>
+                        <div class="flex-1">
+                            <div class="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Human</div>
+                            <p class="text-lg font-semibold text-white">${humanInput || "<i>No input text</i>"}</p>
+                        </div>
+                    </div>
+
+                    ${tools.length > 0 ? `
+                        <div class="space-y-4">
+                            <div class="flex items-center gap-3"><div class="h-px flex-1 bg-slate-800"></div><span class="text-[9px] font-bold text-slate-600 uppercase tracking-widest">Tool Execution Log</span><div class="h-px flex-1 bg-slate-800"></div></div>
+                            ${tools.map(t => `
+                                <div class="bg-black/20 border border-amber-500/20 rounded-2xl overflow-hidden">
+                                    <div class="px-5 py-2 bg-amber-500/5 border-b border-amber-500/10 flex items-center gap-2">
+                                        <i data-lucide="box" class="w-3 h-3 text-amber-500"></i>
+                                        <span class="text-[10px] font-black text-amber-500 uppercase">${t.name}</span>
+                                    </div>
+                                    <div class="grid grid-cols-2 divide-x divide-slate-800">
+                                        <div class="p-5">
+                                            <span class="text-[9px] font-bold text-slate-500 uppercase block mb-2 mono">Input Args</span>
+                                            <pre class="mono text-[11px] text-amber-200/70 overflow-x-auto whitespace-pre-wrap">${JSON.stringify(t.args, null, 2)}</pre>
+                                        </div>
+                                        <div class="p-5">
+                                            <span class="text-[9px] font-bold text-slate-500 uppercase block mb-2 mono">Output</span>
+                                            <div class="mono text-[11px] text-emerald-400/80 whitespace-pre-wrap">${t.output}</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    ` : ''}
+
+                    <div class="flex gap-5 bg-blue-500/5 p-6 rounded-2xl border border-blue-500/10">
+                        <div class="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center shrink-0 shadow-lg shadow-blue-500/20 text-white"><i data-lucide="bot" class="w-4 h-4"></i></div>
+                        <div class="flex-1">
+                            <div class="text-[10px] font-bold text-blue-500 uppercase tracking-widest mb-1">AI Response</div>
+                            <div class="text-slate-200 text-sm leading-relaxed whitespace-pre-wrap">${aiResponse || "<i>Thinking...</i>"}</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+        container.appendChild(turnCard);
+    });
+    lucide.createIcons();
+}
+
+
+
+
+
+        function goHome() {
+            document.getElementById('projectGallery').classList.remove('hidden');
+            document.getElementById('inspector').classList.add('hidden');
+        }
+    </script>
+</body>
+</html>
+ -->
+
+
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TraceForge | Execution Inspector</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script>
+        tailwind.config = { darkMode: 'class' }
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&family=Fira+Code:wght@400;500&display=swap');
+        body { font-family: 'Inter', sans-serif; transition: background-color 0.3s ease; }
+        .dark body { background-color: #0b0f1a; color: #cbd5e1; }
+        html:not(.dark) body { background-color: #f8fafc; color: #334155; }
+        html:not(.dark) .bg-[#111622], html:not(.dark) .bg-[#0d111c] { background-color: #ffffff; border-color: #e2e8f0; }
+        .mono { font-family: 'Fira Code', monospace; }
+        .collapsible-content { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.3s ease-out; }
+        .collapsible-content.open { grid-template-rows: 1fr; }
+        .collapsible-content > div { overflow: hidden; }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 10px; }
+        .dashboard-card { transition: transform 0.2s ease, background-color 0.2s ease; }
+    </style>
+</head>
+<body class="antialiased">
+    <div id="app" class="flex flex-col h-screen">
+        <header class="bg-[#111622] border-b border-slate-800 px-8 py-4 flex justify-between items-center shrink-0">
+            <div class="flex items-center gap-4 cursor-pointer" onclick="goHome()">
+                <div class="bg-blue-600 p-2 rounded-xl text-white shadow-lg shadow-blue-500/20"><i data-lucide="zap" class="w-5 h-5"></i></div>
+                <h1 class="text-xl font-bold tracking-tight text-white">TraceForge <span class="text-blue-500 ml-1 opacity-50 text-sm font-mono">v2.5</span></h1>
+            </div>
+            <div class="flex items-center gap-4">
+                <button onclick="toggleTheme()" class="p-2 rounded-lg bg-slate-800 text-slate-400 hover:text-white transition border border-slate-700"><i data-lucide="sun" id="themeIcon" class="w-4 h-4"></i></button>
+                <input type="file" id="fileInput" class="hidden" accept=".jsonl,.json">
+                <button onclick="document.getElementById('fileInput').click()" class="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2 rounded-xl text-sm font-semibold transition shadow-lg shadow-blue-500/20">Import Logs</button>
+            </div>
+        </header>
+
+        <main id="inspector" class="hidden flex-1 flex overflow-hidden">
+            <div class="w-80 border-r border-slate-800 bg-[#0d111c] flex flex-col">
+                <div class="p-6 border-b border-slate-800">
+                    <button onclick="goHome()" class="mb-6 text-[11px] font-bold text-slate-500 hover:text-blue-400 flex items-center gap-2 uppercase tracking-widest"><i data-lucide="arrow-left" class="w-4 h-4"></i> Projects</button>
+                    <div id="projectTokenBadge" class="w-full mb-6 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-500 text-[10px] font-mono flex items-center gap-2">
+                        <i data-lucide="database" class="w-3 h-3"></i>
+                        <span>PROJECT: <span id="projectTotalTokens" class="font-bold">0</span> tokens</span>
+                    </div>
+                    <div class="relative"><i data-lucide="search" class="w-4 h-4 absolute left-4 top-3.5 text-slate-500"></i><input type="text" id="sessionSearch" onkeyup="filterSessions()" placeholder="Search..." class="w-full pl-11 pr-4 py-3 rounded-xl border border-slate-800 bg-[#161b29] text-sm text-white outline-none focus:ring-1 focus:ring-blue-500"></div>
+                </div>
+                <div class="flex-1 overflow-y-auto p-3 space-y-1" id="sidebarItems"></div>
+            </div>
+
+            <div class="flex-1 overflow-y-auto p-10 bg-[#0b0f1a]" id="viewport">
+                <div id="emptyState" class="h-full flex flex-col items-center justify-center text-slate-600"><i data-lucide="terminal" class="w-12 h-12 opacity-20 mb-4"></i><p>Select a session to view metrics</p></div>
+                <div id="sessionContent" class="hidden max-w-5xl mx-auto">
+                    <div id="sessionStats" class="grid grid-cols-4 gap-4 mb-4"></div>
+                    
+                    <div id="toolBreakdown" class="hidden mb-10 p-6 bg-[#111622] border border-slate-800 rounded-2xl shadow-2xl">
+                        <h4 class="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-4">Avg Tool Latency Breakdown</h4>
+                        <div id="toolTable" class="space-y-2"></div>
+                    </div>
+
+                    <div id="threadContainer" class="space-y-6 pb-20"></div>
+                </div>
+            </div>
+        </main>
+
+        <div id="projectGallery" class="flex-1 overflow-y-auto p-12 max-w-6xl mx-auto w-full">
+            <h2 class="text-4xl font-black text-white mb-8 tracking-tighter">Projects</h2>
+            <div id="projectGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"></div>
+        </div>
+    </div>
+
+    <script>
+        let projectGroups = {}; let sessionGroups = {};
+
+        function getMsgTokens(msg) { 
+            const usage = msg.data?.additional_kwargs?.usage || msg.data?.usage_metadata || msg.usage_metadata || {};
+            return usage.total_tokens || 0; 
+        }
+
+        function getDuration(start, end) { return start && end ? ((new Date(end) - new Date(start)) / 1000) : 0; }
+
+        function toggleBox(header) {
+            const content = header.nextElementSibling;
+            const icon = header.querySelector('.chevron-icon');
+            const isOpen = content.classList.toggle('open');
+            if(icon) icon.style.transform = isOpen ? 'rotate(180deg)' : 'rotate(0deg)';
+        }
+
+        function toggleToolBreakdown() { document.getElementById('toolBreakdown').classList.toggle('hidden'); }
+
+        document.getElementById('fileInput').addEventListener('change', (e) => {
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                const lines = ev.target.result.split('\n').filter(l => l.trim());
+                projectGroups = {};
+                lines.forEach(line => {
+                    const t = JSON.parse(line);
+                    const p = t.project || "Default";
+                    if (!projectGroups[p]) projectGroups[p] = [];
+                    projectGroups[p].push(t);
+                });
+                renderProjects();
+            };
+            reader.readAsText(e.target.files[0]);
+        });
+
+        function renderProjects() {
+            const grid = document.getElementById('projectGrid'); grid.innerHTML = '';
+            document.getElementById('inspector').classList.add('hidden');
+            document.getElementById('projectGallery').classList.remove('hidden');
+            Object.keys(projectGroups).forEach(p => {
+                const card = document.createElement('div');
+                card.className = "bg-[#111622] p-6 rounded-2xl border border-slate-800 hover:border-blue-500 cursor-pointer shadow-xl";
+                card.innerHTML = `<h3 class="text-xl font-bold text-white">${p}</h3><p class="text-xs text-slate-500 font-mono">${projectGroups[p].length} Traces</p>`;
+                card.onclick = () => selectProject(p);
+                grid.appendChild(card);
+            });
+            lucide.createIcons();
+        }
+
+        function selectProject(p) {
+            document.getElementById('projectGallery').classList.add('hidden');
+            document.getElementById('inspector').classList.remove('hidden');
+            sessionGroups = {}; let projectTotal = 0;
+            projectGroups[p].forEach(t => {
+                const s = t.metadata?.session_id || "no-session";
+                if (!sessionGroups[s]) sessionGroups[s] = [];
+                sessionGroups[s].push(t);
+                (t.spans?.[0]?.outputs?.result?.messages || []).forEach(m => projectTotal += getMsgTokens(m));
+            });
+            document.getElementById('projectTotalTokens').innerText = projectTotal.toLocaleString();
+            renderSidebar();
+        }
+
+        function renderSidebar() {
+            const container = document.getElementById('sidebarItems'); container.innerHTML = '';
+            const sortedIds = Object.keys(sessionGroups).sort((a, b) => new Date(sessionGroups[b][0].start_time) - new Date(sessionGroups[a][0].start_time));
+            sortedIds.forEach(s => {
+                const traces = sessionGroups[s]; const dateObj = new Date(traces[0].start_time);
+                let sessionTokens = 0; traces.forEach(t => (t.spans?.[0]?.outputs?.result?.messages || []).forEach(m => sessionTokens += getMsgTokens(m)));
+                const div = document.createElement('div');
+                div.className = "session-item p-4 rounded-xl cursor-pointer hover:bg-slate-800/50 border border-transparent hover:border-slate-700 mb-1";
+                div.innerHTML = `<div class="flex flex-col gap-1"><div class="flex justify-between text-[10px] font-bold uppercase text-slate-500"><span class="text-blue-500">Session</span><span>${dateObj.toLocaleDateString([], {month:'short', day:'numeric'})}</span></div><div class="text-white text-sm mono truncate">${s}</div><div class="flex justify-between items-center"><div class="text-[11px] text-slate-500 flex items-center gap-1"><i data-lucide="clock" class="w-3 h-3"></i><span>${dateObj.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span></div><span class="text-[10px] font-mono text-emerald-500 bg-emerald-500/10 px-1.5 rounded">${sessionTokens.toLocaleString()} tkn</span></div></div>`;
+                div.onclick = () => { document.querySelectorAll('.session-item').forEach(el => el.classList.remove('bg-slate-800', 'border-slate-700')); div.classList.add('bg-slate-800', 'border-slate-700'); selectSession(s); };
+                container.appendChild(div);
+            });
+            lucide.createIcons();
+        }
+
+        function selectSession(sId) {
+            document.getElementById('emptyState').classList.add('hidden');
+            document.getElementById('sessionContent').classList.remove('hidden');
+            document.getElementById('toolBreakdown').classList.add('hidden');
+            const container = document.getElementById('threadContainer'); container.innerHTML = '';
+            const statsContainer = document.getElementById('sessionStats'); 
+            const toolTable = document.getElementById('toolTable');
+            toolTable.innerHTML = '';
+
+            const traces = sessionGroups[sId].sort((a, b) => new Date(b.start_time) - new Date(a.start_time));
+            
+            // Analytics Calc
+            let totalTokens = 0, totalTime = 0, responseCount = 0;
+            let toolMetrics = {};
+
+            traces.forEach(t => {
+                totalTokens += (t.spans?.[0]?.outputs?.result?.messages || []).reduce((acc, m) => acc + getMsgTokens(m), 0);
+                totalTime += getDuration(t.start_time, t.end_time);
+                const messages = t.spans?.[0]?.outputs?.result?.messages || [];
+                messages.forEach(m => {
+                    if (m.type === 'ai') responseCount++;
+                    (m.data?.tool_calls || m.tool_calls || []).forEach(c => {
+                        if (!toolMetrics[c.name]) toolMetrics[c.name] = { count: 0, totalTime: 0 };
+                        toolMetrics[c.name].count++;
+                        toolMetrics[c.name].totalTime += getDuration(t.start_time, t.end_time);
+                    });
+                });
+            });
+
+            const toolsArray = Object.entries(toolMetrics).map(([name, data]) => ({ name, avg: data.totalTime / data.count })).sort((a,b) => b.avg - a.avg);
+            const slowestTool = toolsArray[0]?.name || "None";
+
+            // Restored Dashboard
+            statsContainer.innerHTML = `
+                <div onclick="toggleToolBreakdown()" class="dashboard-card p-4 rounded-2xl border border-red-500/20 bg-red-500/5 hover:bg-red-500/10 cursor-pointer">
+                    <span class="text-[9px] font-bold text-red-400 uppercase tracking-widest block mb-1">Bottleneck Tool</span>
+                    <span class="text-lg font-bold text-red-400 truncate block">${slowestTool}</span>
+                </div>
+                <div class="dashboard-card p-4 rounded-2xl border border-slate-800 bg-slate-800/20">
+                    <span class="text-[9px] font-bold text-slate-500 uppercase tracking-widest block mb-1">Avg Turn Time</span>
+                    <span class="text-lg font-bold text-amber-400 block">${(totalTime / traces.length).toFixed(2)}s</span>
+                </div>
+                <div class="dashboard-card p-4 rounded-2xl border border-slate-800 bg-slate-800/20">
+                    <span class="text-[9px] font-bold text-slate-500 uppercase tracking-widest block mb-1">Avg Tokens</span>
+                    <span class="text-lg font-bold text-emerald-400 block">${(totalTokens / (responseCount || 1)).toFixed(0)}</span>
+                </div>
+                <div class="dashboard-card p-4 rounded-2xl border border-slate-800 bg-slate-800/20">
+                    <span class="text-[9px] font-bold text-slate-500 uppercase tracking-widest block mb-1">Session Total</span>
+                    <span class="text-lg font-bold text-blue-400 block">${totalTokens.toLocaleString()}</span>
+                </div>
+            `;
+
+            toolsArray.forEach(t => {
+                toolTable.innerHTML += `<div class="flex items-center justify-between p-3 bg-black/20 rounded-xl border border-slate-800"><span class="text-sm font-mono text-slate-300">${t.name}</span><span class="text-xs font-bold text-amber-500">${t.avg.toFixed(2)}s <span class="text-[10px] text-slate-600 font-normal tracking-tight">avg</span></span></div>`;
+            });
+
+            // Turn Rendering
+            traces.forEach((trace, idx) => {
+                const turnCard = document.createElement('div');
+                turnCard.className = "bg-[#0d111c] border border-slate-800 rounded-3xl overflow-hidden mb-6";
+                const span = (trace.spans || [])[0]; const messages = span?.outputs?.result?.messages || [];
+                let human = "", ai = "", aiTkn = 0, model = "LLM", tools = [];
+
+                messages.forEach((msg, mIdx) => {
+                    if(msg.type === 'human' || msg.data?.type === 'human') human = msg.data?.content || msg.content;
+                    if(msg.type === 'ai' || msg.data?.type === 'ai') {
+                        ai = msg.data?.content || msg.content || ai; aiTkn = getMsgTokens(msg);
+                        model = msg.data?.additional_kwargs?.model_name || msg.metadata?.model || "GPT-4o";
+                        (msg.data?.tool_calls || msg.tool_calls || []).forEach(call => {
+                            let toolMsg = messages.find(m => m.type === 'tool' && (m.id === call.id || m.data?.id === call.id));
+                            const toolTime = toolMsg?.metadata?.duration || getDuration(trace.start_time, trace.end_time).toFixed(2);
+                            const toolTkns = toolMsg?.usage_metadata?.total_tokens || 0;
+                            tools.push({ name: call.name, args: call.args, output: toolMsg?.data?.content || "No output", time: toolTime, tokens: toolTkns });
+                        });
+                    }
+                });
+
+                turnCard.innerHTML = `
+                    <div class="px-8 py-4 bg-[#161b29]/50 flex justify-between items-center cursor-pointer" onclick="toggleBox(this)">
+                        <div class="flex items-center gap-4">
+                            <span class="bg-blue-600 text-[10px] font-black px-2 py-1 rounded text-white uppercase">Turn ${traces.length - idx}</span>
+                            <span class="text-[11px] text-slate-500 font-mono">${new Date(trace.start_time).toLocaleTimeString()}</span>
+                            <div class="flex items-center gap-2 border-l border-slate-800 pl-4">
+                                <span class="text-[10px] font-mono text-emerald-500 bg-emerald-500/5 px-2 rounded border border-emerald-500/10">${aiTkn.toLocaleString()} tkn</span>
+                                <span class="text-[10px] font-mono text-amber-500 bg-amber-500/5 px-2 rounded border border-amber-500/10">${getDuration(trace.start_time, trace.end_time).toFixed(2)}s</span>
+                            </div>
+                        </div>
+                        <i data-lucide="chevron-down" class="w-4 h-4 text-slate-500 transition-transform chevron-icon ${idx === 0 ? 'rotate-180' : ''}"></i>
+                    </div>
+                    <div class="collapsible-content ${idx === 0 ? 'open' : ''}">
+                        <div class="p-8 space-y-8">
+                            <div class="flex gap-5">
+                                <div class="w-8 h-8 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center shrink-0 text-slate-400"><i data-lucide="user" class="w-4 h-4"></i></div>
+                                <div class="flex-1"><span class="text-[9px] font-bold text-slate-500 uppercase tracking-widest block mb-1">Human</span><p class="text-white font-semibold">${human}</p></div>
+                            </div>
+                            ${tools.length ? `<div class="space-y-4">
+                                ${tools.map(t => `<div class="bg-black/20 border border-amber-500/20 rounded-2xl overflow-hidden">
+                                    <div class="px-4 py-2 bg-amber-500/5 border-b border-amber-500/10 flex justify-between items-center">
+                                        <div class="flex items-center gap-2"><i data-lucide="box" class="w-3 h-3 text-amber-500"></i><span class="text-[10px] font-black text-amber-500 uppercase">${t.name}</span></div>
+                                        <div class="flex gap-3"><span class="text-[9px] font-mono text-amber-500/60">${t.tokens} tkn</span><span class="text-[9px] font-mono text-amber-500/60">${t.time}s</span></div>
+                                    </div>
+                                    <div class="grid grid-cols-2 divide-x divide-slate-800 p-4 gap-4">
+                                        <div class="overflow-hidden"><span class="text-[9px] text-slate-500 uppercase block mb-1">Args</span><pre class="mono text-[10px] text-amber-200/60">${JSON.stringify(t.args, null, 2)}</pre></div>
+                                        <div class="overflow-hidden"><span class="text-[9px] text-slate-500 uppercase block mb-1">Output</span><div class="mono text-[10px] text-emerald-400/80">${t.output}</div></div>
+                                    </div>
+                                </div>`).join('')}
+                            </div>` : ''}
+                            <div class="flex gap-5 bg-blue-500/5 p-6 rounded-2xl border border-blue-500/10 relative overflow-hidden">
+                                <div class="absolute top-0 right-0 px-3 py-1 bg-blue-500/10 border-l border-b border-blue-500/20 rounded-bl-lg flex gap-3">
+                                    <span class="text-[9px] font-black text-blue-400 uppercase tracking-widest">${model}</span>
+                                    <span class="text-[9px] font-mono text-blue-300 opacity-60">${aiTkn} tkn</span>
+                                </div>
+                                <div class="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center shrink-0 text-white shadow-lg shadow-blue-500/20"><i data-lucide="bot" class="w-4 h-4"></i></div>
+                                <div class="flex-1"><span class="text-[9px] font-bold text-blue-500 uppercase tracking-widest block mb-1">AI Response</span><div class="text-slate-200 text-sm whitespace-pre-wrap">${ai}</div></div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                container.appendChild(turnCard);
+            });
+            lucide.createIcons();
+        }
+
+        function goHome() { document.getElementById('projectGallery').classList.remove('hidden'); document.getElementById('inspector').classList.add('hidden'); }
+        function toggleTheme() { document.documentElement.classList.toggle('dark'); }
+    </script>
+</body>
+</html>
