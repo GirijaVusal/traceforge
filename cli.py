@@ -1,3 +1,5 @@
+# traceforge/cli.py
+
 import webbrowser
 
 import typer
@@ -25,5 +27,5 @@ def start(
     )
 
 
-if __name__ == "__main__":
+def main():
     app()

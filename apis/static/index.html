@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>TraceForge</title>
+  <style>
+    body { font-family: Arial; margin: 40px; }
+    .trace { margin-bottom: 20px; padding: 10px; border: 1px solid #ddd; }
+    .span { margin-left: 20px; }
+  </style>
+</head>
+<body>
+
+<h1>TraceForge Dashboard</h1>
+
+<div id="traces"></div>
+
+<script>
+async function loadTraces() {
+  const res = await fetch("/api/traces");
+  const traces = await res.json();
+
+  const container = document.getElementById("traces");
+  container.innerHTML = "";
+
+  for (const trace of traces) {
+    const div = document.createElement("div");
+    div.className = "trace";
+
+    div.innerHTML = `
+      <b>Trace:</b> ${trace.trace_id}<br/>
+      <b>Project:</b> ${trace.project}<br/>
+      <button onclick="loadSpans('${trace.trace_id}')">View Spans</button>
+      <div id="spans-${trace.trace_id}"></div>
+    `;
+
+    container.appendChild(div);
+  }
+}
+
+async function loadSpans(traceId) {
+  const res = await fetch(`/api/spans/${traceId}`);
+  const spans = await res.json();
+
+  const container = document.getElementById(`spans-${traceId}`);
+  container.innerHTML = "";
+
+  for (const span of spans) {
+    const div = document.createElement("div");
+    div.className = "span";
+    div.innerHTML = `
+      <b>${span.name}</b> (${span.span_type})<br/>
+      Duration: ${span.duration_ms} ms<br/>
+      Error: ${span.error || "None"}<br/><br/>
+    `;
+    container.appendChild(div);
+  }
+}
+
+loadTraces();
+</script>
+
+</body>
+</html>

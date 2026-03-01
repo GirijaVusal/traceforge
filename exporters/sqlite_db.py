@@ -1,157 +1,93 @@
-# import asyncio
-# import json
-# from pathlib import Path
+# traceforge/exporters/sqlite_db.py
 
-# import aiosqlite
-
-# from .base import BaseExporter
-
-
-# class SQLiteExporter(BaseExporter):
-#     def __init__(self, db_path="traceforge.db"):
-#         self.db_path = str(Path(db_path).resolve())
-#         # Automatically initialize DB tables upon startup
-#         try:
-#             loop = asyncio.get_running_loop()
-#             loop.create_task(self._init_db())
-#         except RuntimeError:
-#             # Fallback if initialized outside of an async event loop
-#             asyncio.run(self._init_db())
-
-#     async def _init_db(self):
-#         """Creates the necessary tables if they don't exist."""
-#         async with aiosqlite.connect(self.db_path) as db:
-#             await db.execute("""
-#                 CREATE TABLE IF NOT EXISTS traces (
-#                     trace_id TEXT PRIMARY KEY,
-#                     project TEXT,
-#                     session_id TEXT,
-#                     start_time TEXT,
-#                     end_time TEXT,
-#                     metadata TEXT,
-#                     spans TEXT
-#                 )
-#             """)
-#             await db.commit()
-
-#     def export(self, trace_dict: dict):
-#         """
-#         Sync interface bridging to async.
-#         Fires off the DB insert into the background without blocking the main thread.
-#         """
-#         try:
-#             loop = asyncio.get_running_loop()
-#             loop.create_task(self._async_export(trace_dict))
-#         except RuntimeError:
-#             asyncio.run(self._async_export(trace_dict))
-
-#     async def _async_export(self, trace_dict: dict):
-#         """Handles the actual async database insertion."""
-#         # Stringify nested JSON objects for SQLite storage
-#         metadata_json = json.dumps(trace_dict.get("metadata", {}))
-#         spans_json = json.dumps(trace_dict.get("spans", []))
-#         session_id = trace_dict.get("metadata", {}).get("session_id", "unknown")
-
-#         async with aiosqlite.connect(self.db_path) as db:
-#             await db.execute(
-#                 """
-#                 INSERT INTO traces (trace_id, project, session_id, start_time, end_time, metadata, spans)
-#                 VALUES (?, ?, ?, ?, ?, ?, ?)
-#             """,
-#                 (
-#                     trace_dict["trace_id"],
-#                     trace_dict["project"],
-#                     session_id,
-#                     trace_dict["start_time"],
-#                     trace_dict["end_time"],
-#                     metadata_json,
-#                     spans_json,
-#                 ),
-#             )
-#             await db.commit()
-
-import json
-from pathlib import Path
+import asyncio
+from typing import List
 
 import aiosqlite
+from traceforge.core.models import Span, Trace
 
-from .base import BaseExporter
 
+class SQLiteExporter:
+    def __init__(self, db_path: str = "traceforge.db"):
+        self.db_path = db_path
+        self._initialized = False
 
-class AsyncSQLiteExporter(BaseExporter):
-    def __init__(self, db_path="traceforge.db"):
-        self.db_path = Path(db_path)
+    async def _initialize(self):
+        async with aiosqlite.connect(self.db_path) as conn:
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS traces (
+                    trace_id TEXT PRIMARY KEY,
+                    project TEXT,
+                    metadata TEXT,
+                    start_time REAL,
+                    end_time REAL
+                )
+            """)
 
-    async def _init_db(self, db):
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS traces (
-                trace_id TEXT PRIMARY KEY,
-                project TEXT,
-                metadata TEXT,
-                start_time TEXT,
-                end_time TEXT
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS spans (
+                    span_id TEXT PRIMARY KEY,
+                    trace_id TEXT,
+                    parent_id TEXT,
+                    name TEXT,
+                    span_type TEXT,
+                    start_time REAL,
+                    end_time REAL,
+                    duration_ms REAL,
+                    inputs TEXT,
+                    outputs TEXT,
+                    error TEXT,
+                    metadata TEXT
+                )
+            """)
+
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_spans_trace_id ON spans(trace_id)"
             )
-        """)
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS spans (
-                span_id TEXT PRIMARY KEY,
-                trace_id TEXT,
-                parent_id TEXT,
-                name TEXT,
-                type TEXT,
-                start_time TEXT,
-                end_time TEXT,
-                duration_ms REAL,
-                inputs TEXT,
-                outputs TEXT,
-                error TEXT,
-                metadata TEXT
-            )
-        """)
-        await db.commit()
 
-    async def export(self, trace_dict: dict):
-        async with aiosqlite.connect(self.db_path) as db:
-            await self._init_db(db)
+            await conn.commit()
 
-            await db.execute(
+        self._initialized = True
+
+    def export_trace(self, trace: Trace):
+        asyncio.run(self._export_trace_async(trace))
+
+    async def _export_trace_async(self, trace: Trace):
+        if not self._initialized:
+            await self._initialize()
+
+        async with aiosqlite.connect(self.db_path) as conn:
+            # Insert trace
+            await conn.execute(
                 """
-                INSERT OR REPLACE INTO traces VALUES (?, ?, ?, ?, ?)
-            """,
-                (
-                    trace_dict["trace_id"],
-                    trace_dict["project"],
-                    json.dumps(trace_dict["metadata"]),
-                    trace_dict["start_time"],
-                    trace_dict["end_time"],
-                ),
+                INSERT OR REPLACE INTO traces
+                (trace_id, project, metadata, start_time, end_time)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                trace.to_db_tuple(),
             )
 
-            async def insert_span(span):
-                await db.execute(
+            # Flatten spans
+            spans: List[Span] = []
+
+            def collect(span: Span):
+                spans.append(span)
+                for child in span.children:
+                    collect(child)
+
+            for root_span in trace.spans:
+                collect(root_span)
+
+            if spans:
+                await conn.executemany(
                     """
-                    INSERT OR REPLACE INTO spans VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                    (
-                        span["span_id"],
-                        span["trace_id"],
-                        span["parent_id"],
-                        span["name"],
-                        span["type"],
-                        span["start_time"],
-                        span["end_time"],
-                        span["duration_ms"],
-                        json.dumps(span["inputs"]),
-                        json.dumps(span["outputs"]),
-                        span["error"],
-                        json.dumps(span["metadata"]),
-                    ),
+                    INSERT OR REPLACE INTO spans
+                    (span_id, trace_id, parent_id, name, span_type,
+                     start_time, end_time, duration_ms,
+                     inputs, outputs, error, metadata)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [s.to_db_tuple() for s in spans],
                 )
 
-                for child in span.get("children", []):
-                    await insert_span(child)
-
-            for span in trace_dict["spans"]:
-                await insert_span(span)
-
-            await db.commit()
+            await conn.commit()
