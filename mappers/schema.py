@@ -1,5 +1,3 @@
-# mappers/schems.py
-
 import datetime
 
 
@@ -62,4 +60,3 @@ def create_standard_msg(
             ],
         },
     }
-    

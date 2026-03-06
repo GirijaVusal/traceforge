@@ -1,5 +1,3 @@
-# # traceforge/core/span.py
-# from .context import get_current_span, get_trace, set_current_span
 from traceforge.mappers import standardize_output
 
 from .manager import get_current_span, get_trace, set_current_span

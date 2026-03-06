@@ -1,5 +1,3 @@
-# # traceforge/instrumentation/agent_wrapper.py
-
 import inspect
 
 from traceforge.core.models import universal_serializer

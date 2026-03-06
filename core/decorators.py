@@ -1,5 +1,3 @@
-# traceforge/core/decorators.py
-
 import functools
 import inspect
 

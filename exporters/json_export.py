@@ -1,5 +1,3 @@
-# traceforge/exporters/json_file.py
-
 import json
 from pathlib import Path
 

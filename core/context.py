@@ -1,5 +1,3 @@
-# traceforge/core/context.py
-
 import contextvars
 from typing import Optional
 
